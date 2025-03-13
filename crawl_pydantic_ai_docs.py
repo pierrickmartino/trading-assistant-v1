@@ -33,50 +33,150 @@ class ProcessedChunk:
     metadata: Dict[str, Any]
     embedding: List[float]
 
-def chunk_text(text: str, chunk_size: int = 3000) -> List[str]:
-    """Split text into chunks, respecting code blocks and paragraphs."""
+def chunk_text(text: str, chunk_size: int = 5000) -> List[str]:
+    """
+    Sépare d'abord le Markdown en endpoints (chaque section commence par '##' 
+    sur une ligne seule). Puis, si un endpoint dépasse 'chunk_size', on le découpe 
+    en plus petits blocs en respectant les blocs de code, les paragraphes et les phrases.
+    """
+    # --- 1) Séparation en endpoints par '##' ---
+    lines = text.splitlines()
+    endpoints = []
+    current_section = []
+    found_endpoint = False
+    
+    for line in lines:
+        # On repère le début d'un nouveau endpoint si la ligne est strictement '##'
+        if line.strip() == "##":
+            # On "clôt" la section précédente s'il y en avait une
+            if current_section:
+                endpoints.append("\n".join(current_section).strip())
+                current_section = []
+            current_section.append(line)
+            found_endpoint = True
+        else:
+            # On n'accumule que si on a trouvé au moins un '##'
+            # (autrement, tout le texte avant le 1er '##' est ignoré)
+            if found_endpoint:
+                current_section.append(line)
+    
+    # Ne pas oublier la dernière section
+    if current_section:
+        endpoints.append("\n".join(current_section).strip())
+    
+    # --- 2) Découpage de chaque endpoint en chunks plus petits si nécessaire ---
+    final_chunks = []
+    for endpoint in endpoints:
+        if len(endpoint) <= chunk_size:
+            # Si le endpoint fait moins que chunk_size, on l'ajoute directement
+            final_chunks.append(endpoint)
+        else:
+            # Sinon, on le découpe via la logique code/paragraphes/phrases
+            final_chunks.extend(_split_large_text(endpoint, chunk_size))
+    
+    return final_chunks
+
+def _split_large_text(text: str, chunk_size: int) -> List[str]:
+    """
+    Découpe un texte trop grand en chunks en suivant un ordre de priorité :
+    - couper juste avant un bloc de code (```),
+    - sinon couper avant un paragraphe vide (\n\n),
+    - sinon couper à la fin d’une phrase ('. '),
+    - sinon on coupe "comme on peut" si on n'a rien trouvé.
+    """
     chunks = []
     start = 0
-    text_length = len(text)
-
-    while start < text_length:
-        # Calculate end position
+    length = len(text)
+    
+    while start < length:
         end = start + chunk_size
-
-        # If we're at the end of the text, just take what's left
-        if end >= text_length:
-            chunks.append(text[start:].strip())
+        if end >= length:
+            # Dernier bout du texte
+            chunk = text[start:].strip()
+            if chunk:
+                chunks.append(chunk)
             break
-
-        # Try to find a code block boundary first (```)
-        chunk = text[start:end]
-        code_block = chunk.rfind('```')
-        if code_block != -1 and code_block > chunk_size * 0.3:
-            end = start + code_block
-
-        # If no code block, try to break at a paragraph
-        elif '\n\n' in chunk:
-            # Find the last paragraph break
-            last_break = chunk.rfind('\n\n')
-            if last_break > chunk_size * 0.3:  # Only break if we're past 30% of chunk_size
+        
+        chunk_candidate = text[start:end]
+        
+        # 1) Tenter de rompre juste avant le dernier ``` si on le trouve > 30% du chunk
+        code_boundary = chunk_candidate.rfind('```')
+        if code_boundary != -1 and code_boundary > chunk_size * 0.3:
+            end = start + code_boundary
+        
+        # 2) Sinon, essayer de trouver un saut de paragraphe \n\n
+        elif '\n\n' in chunk_candidate:
+            last_break = chunk_candidate.rfind('\n\n')
+            if last_break > chunk_size * 0.3:
                 end = start + last_break
-
-        # If no paragraph break, try to break at a sentence
-        elif '. ' in chunk:
-            # Find the last sentence break
-            last_period = chunk.rfind('. ')
-            if last_period > chunk_size * 0.3:  # Only break if we're past 30% of chunk_size
+        
+        # 3) Sinon, couper au dernier point ('. ')
+        elif '. ' in chunk_candidate:
+            last_period = chunk_candidate.rfind('. ')
+            if last_period > chunk_size * 0.3:
                 end = start + last_period + 1
-
-        # Extract chunk and clean it up
+        
+        # On prend le texte jusqu'à 'end'
         chunk = text[start:end].strip()
         if chunk:
             chunks.append(chunk)
-
-        # Move start position for next chunk
+        
+        # On se décale : on démarre le chunk suivant juste après la fin du chunk précédent
+        # (ou +1 pour éviter de bloquer si end = start)
         start = max(start + 1, end)
-
+    
     return chunks
+
+# def chunk_text(text: str, chunk_size: int = 3000) -> List[str]:
+#     """Split text into chunks, respecting code blocks and paragraphs."""
+#     chunks = []
+#     start = 0
+#     text_length = len(text)
+
+#     while start < text_length:
+#         # Calculate end position
+#         end = start + chunk_size
+
+#         # If we're at the end of the text, just take what's left
+#         if end >= text_length:
+#             chunks.append(text[start:].strip())
+#             break
+        
+#         # Try to find the start of an endpoint section (##)
+#         chunk = text[start:end]
+#         code_block = chunk.rfind('##')
+#         if code_block != -1 and code_block > chunk_size * 0.3:
+#             end = start + code_block
+        
+#         # If no endpoint section, try to find a code block boundary first (```)
+#         elif '```' in chunk:
+#             last_boundary = chunk.rfind('```')
+#             if last_boundary > chunk_size * 0.3:  # Only break if we're past 30% of chunk_size
+#                 end = start + last_boundary
+
+#         # If no code block, try to break at a paragraph
+#         elif '\n\n' in chunk:
+#             # Find the last paragraph break
+#             last_break = chunk.rfind('\n\n')
+#             if last_break > chunk_size * 0.3:  # Only break if we're past 30% of chunk_size
+#                 end = start + last_break
+
+#         # If no paragraph break, try to break at a sentence
+#         elif '. ' in chunk:
+#             # Find the last sentence break
+#             last_period = chunk.rfind('. ')
+#             if last_period > chunk_size * 0.3:  # Only break if we're past 30% of chunk_size
+#                 end = start + last_period + 1
+
+#         # Extract chunk and clean it up
+#         chunk = text[start:end].strip()
+#         if chunk:
+#             chunks.append(chunk)
+
+#         # Move start position for next chunk
+#         start = max(start + 1, end)
+
+#     return chunks
 
 async def get_title_and_summary(chunk: str, url: str) -> Dict[str, str]:
     """Extract title and summary using GPT-4."""
@@ -112,6 +212,33 @@ async def get_embedding(text: str) -> List[float]:
         print(f"Error getting embedding: {e}")
         return [0] * 1536  # Return zero vector on error
 
+async def is_pro_endpoint(chunk: str) -> str:
+    """
+    Détecte si un endpoint est un 'PRO' en cherchant la présence d'une image ![](...)
+    juste après le titre (c.-à-d. soit sur la même ligne que 'Get ...', 
+    soit la ligne immédiatement suivante).
+    """
+    # On découpe en lignes (on retire les lignes vides pour simplifier)
+    lines = [l.strip() for l in chunk.splitlines() if l.strip()]
+    
+    # Pour chaque ligne, si elle commence par "Get " (ou "Get" insensible à la casse),
+    # on regarde si elle contient déjà "![](...)". Sinon, on check la ligne suivante.
+    for idx, line in enumerate(lines):
+        if line.lower().startswith("get "):  # repère le titre
+            # Cas 1 : l'image est sur la même ligne
+            if "![](" in line:
+                return 'PRO'
+            # Cas 2 : l'image est à la ligne suivante
+            if idx + 1 < len(lines):
+                if "![](" in lines[idx + 1]:
+                    return 'PRO'
+            # Si ni sur la même ligne, ni la suivante, on considère que c'est un endpoint "gratuit"
+            return 'FREE'
+    
+    # Si on n'a pas trouvé de ligne commençant par "Get ",
+    # on ne sait pas détecter (on renvoie False par défaut)
+    return 'N/A'
+
 async def process_chunk(chunk: str, chunk_number: int, url: str) -> ProcessedChunk:
     """Process a single chunk of text."""
     # Get title and summary
@@ -119,11 +246,15 @@ async def process_chunk(chunk: str, chunk_number: int, url: str) -> ProcessedChu
     
     # Get embedding
     embedding = await get_embedding(chunk)
+
+    # Get PRO information
+    pro_information = await is_pro_endpoint(chunk) 
     
     # Create metadata
     metadata = {
         "source": "polygonscan_api_docs",
         "chunk_size": len(chunk),
+        "is_pro": pro_information,
         "crawled_at": datetime.now(timezone.utc).isoformat(),
         "url_path": urlparse(url).path
     }
