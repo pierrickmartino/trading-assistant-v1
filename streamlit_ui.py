@@ -105,8 +105,8 @@ async def run_agent_with_streaming(user_input: str):
 
 
 async def main():
-    st.title("Archon - Agent Builder")
-    st.write("Describe to me an AI agent you want to build and I'll code it for you with Pydantic AI.")
+    st.title("PolygonScan - Expert")
+    st.write("Describe to me the information you want to retrieve and I'll code it for you with PolygonScan API.")
 
     # Initialize chat history in session state if not present
     if "messages" not in st.session_state:
